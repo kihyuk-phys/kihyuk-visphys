@@ -2,7 +2,8 @@
 #  run_csim.tcl  –  C-simulation only (fast verification)
 #
 #  Usage:
-#    vitis_hls -f pynq_prob_computing/hls/scripts/run_csim.tcl
+#    vivado_hls -f pynq_prob_computing/hls/scripts/run_csim.tcl
+#    (Vitis HLS: vitis_hls -f ...)
 # ============================================================
 
 set SCRIPT_DIR [file dirname [file normalize [info script]]]
