@@ -1,10 +1,8 @@
 # ============================================================
 #  create_bd.tcl  –  Vivado Block Design + Bitstream 전 과정
+#                    (Verilog RTL 직접 합성 버전)
 #
-#  실행 전 필수 조건
-#  ─────────────────────────────────────────────────────────────
-#  1. hls/scripts/create_project.tcl 로 HLS 합성이 완료되어야 함
-#     → hls/ising_sa_proj/solution1/impl/ip/  디렉터리가 존재해야 함
+#  HLS 합성 불필요 – rtl/*.v 파일을 직접 사용
 #
 #  Usage (Vivado Tcl Console 또는 커맨드라인)
 #  ─────────────────────────────────────────────────────────────
@@ -52,27 +50,19 @@ set BOARD_PART "tul.com.tw:pynq-z2:part0:1.0"
 set PROJ_NAME  "ising_sa_vivado"
 set BD_NAME    "ising_sa_bd"
 
-# HLS IP 경로 (create_project.tcl 실행 후 생성됨)
 # 이 스크립트가 pynq_prob_computing/vivado/ 에 있다고 가정
 set SCRIPT_DIR [file dirname [file normalize [info script]]]
-set HLS_IP_REPO [file normalize "$SCRIPT_DIR/../hls/ising_sa_proj/solution1/impl/ip"]
-
-# HLS IP의 VLNV (create_project.tcl 의 -vendor / -library / -version 과 일치)
-set IP_VLNV "knu:prob_computing:ising_core:1.0"
-
-# 출력 디렉터리
-set OUT_DIR [file normalize "$SCRIPT_DIR/../pynq_output"]
+set RTL_DIR    [file normalize "$SCRIPT_DIR/../rtl"]
+set OUT_DIR    [file normalize "$SCRIPT_DIR/../pynq_output"]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ② HLS IP 존재 확인
+#  ② RTL 파일 존재 확인
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-if {![file isdirectory $HLS_IP_REPO]} {
-    error "HLS IP 디렉터리가 없습니다: $HLS_IP_REPO\n\
-먼저 HLS 합성을 실행하세요:\n\
-  vivado_hls -f pynq_prob_computing/hls/scripts/create_project.tcl"
+if {![file isdirectory $RTL_DIR]} {
+    error "RTL 디렉터리가 없습니다: $RTL_DIR"
 }
-puts "HLS IP 경로: $HLS_IP_REPO"
+puts "RTL 경로: $RTL_DIR"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ③ Vivado 프로젝트 생성
@@ -80,19 +70,26 @@ puts "HLS IP 경로: $HLS_IP_REPO"
 
 create_project $PROJ_NAME [file normalize "$SCRIPT_DIR/$PROJ_NAME"] -part $PART
 
-# 보드 파일이 설치되어 있으면 적용, 없으면 파트만 사용
 if {[catch {set_property board_part $BOARD_PART [current_project]} err]} {
     puts "WARN: 보드 파일 없음 ($BOARD_PART). Part 설정만 사용합니다."
-    puts "      보드 파일 설치: Tools → Board Repository"
 }
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ④ HLS IP를 IP Catalog에 추가
+#  ④ RTL 소스 파일 추가
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-set_property ip_repo_paths [list $HLS_IP_REPO] [current_project]
-update_ip_catalog -rebuild
-puts "IP catalog 업데이트 완료."
+set rtl_files [list \
+    "$RTL_DIR/ising_core.v"     \
+    "$RTL_DIR/sa_engine.v"      \
+    "$RTL_DIR/axi4l_slave.v"    \
+    "$RTL_DIR/axi4_wr_master.v" \
+    "$RTL_DIR/sigmoid_lut.v"    \
+    "$RTL_DIR/lfsr32.v"         \
+]
+add_files -norecurse $rtl_files
+set_property top ising_core [current_fileset]
+update_compile_order -fileset sources_1
+puts "RTL 파일 추가 완료: [llength $rtl_files]개"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ⑤ Block Design 생성
@@ -107,14 +104,12 @@ puts "Block Design '$BD_NAME' 생성."
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 processing_system7_0
 
-# 보드 프리셋 적용 (PYNQ-Z2 기본값: DDR, UART, ENET 등 자동 설정)
 if {[catch {
     apply_bd_automation \
         -rule xilinx.com:bd_rule:processing_system7 \
         -config {make_external "FIXED_IO, DDR" apply_board_preset "1"} \
         [get_bd_cells processing_system7_0]
 } err]} {
-    # 보드 파일 없을 때 수동 설정 (PYNQ-Z2 기준 최소값)
     puts "보드 프리셋 없음, 수동 PS7 설정 적용..."
     make_bd_intf_pins_external [get_bd_intf_pins processing_system7_0/DDR]
     make_bd_intf_pins_external [get_bd_intf_pins processing_system7_0/FIXED_IO]
@@ -126,36 +121,34 @@ if {[catch {
     ] [get_bd_cells processing_system7_0]
 }
 
-# HP0 / HP1 활성화 (HLS m_axi 포트 → DDR 접근용)
 set_property -dict [list \
     CONFIG.PCW_USE_S_AXI_HP0        {1} \
     CONFIG.PCW_USE_S_AXI_HP1        {1} \
     CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} \
     CONFIG.PCW_S_AXI_HP1_DATA_WIDTH {64} \
 ] [get_bd_cells processing_system7_0]
-
 puts "Zynq PS7 설정 완료."
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ⑦ proc_sys_reset (리셋 컨트롤러)
+#  ⑦ proc_sys_reset
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps7_0_100M
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#  ⑧ HLS IP (ising_core) 인스턴스
+#  ⑧ ising_core RTL 모듈 인스턴스 (Module Reference)
+#
+#  RTL 파일을 직접 BD 셀로 참조 (IP 패키징 불필요)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-create_bd_cell -type ip -vlnv $IP_VLNV ising_core_0
-puts "HLS IP ($IP_VLNV) 인스턴스 생성."
+create_bd_cell -type module -reference ising_core ising_core_0
+puts "RTL 모듈 ising_core 인스턴스 생성."
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  ⑨ AXI 인프라
-#     ctrl  : AXI Interconnect  (GP0 → s_axilite, 1:1)
+#     ctrl  : AXI Interconnect  (GP0 → s_axi_ctrl)
 #     gmem0 : AXI SmartConnect  (m_axi_gmem0 → HP0)
 #     gmem1 : AXI SmartConnect  (m_axi_gmem1 → HP1)
-#
-#  SmartConnect은 AXI4 ↔ AXI4-lite 폭 변환 자동 처리
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 # ctrl 인터커넥트 (AXI Interconnect, 1SI/1MI)
